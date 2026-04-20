@@ -10,8 +10,6 @@ import rasterio
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #use a gpu if available
-print(f"Using {device} device")
 
 class ResidualBlock(nn.Module): # using nn.Module is Pytorch standard
     """
@@ -109,6 +107,8 @@ def get_tensor_from_pixel_coord(hsi_path, coords, bands):
     return ds
     
 if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #use a gpu if available
+    print(f"Using {device} device")
     
     PATH = 'modelTrained_3_Nepoch_15.pth' # Colin's model
     # HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hdr'
@@ -159,8 +159,7 @@ if __name__ == "__main__":
     
     chkpt = torch.load(PATH, map_location=torch.device('cpu')) #weights are loaded
 
-    model = model.to(device) # model on gpu if available
-    
+
     # Removing everything related to the projector (as the model is not self-supervised) and keeping the encoding    
     layers_to_keep = []
     for k, v in chkpt.items():
@@ -171,26 +170,29 @@ if __name__ == "__main__":
             
     # model.load_state_dict(d, strict=False)
     model.load_state_dict(d) #model applied for encoding only
+    model = model.to(device) # model on gpu if available
     model.eval() #deactivate normalization
     
     # BoundingBox(left=313322.075, bottom=449405.77, right=313672.075, top=451679.77)
     # emb = ds
     # emb = emb.squeeze()
     with torch.no_grad():
-        emb = model(ds)
+        #emb = model(ds)
+        emb = model(ds.to(device)) #ds is the tensor
     print(emb.shape)
     
-    # emb = model(ds.to(device)) #ds is the tensor
     
     # Applying PCA
     pca = PCA(n_components=3) # 3 for RGB
-    pca_emb = pca.fit_transform(emb.numpy())
+    #pca_emb = pca.fit_transform(emb.numpy())
+    pca_emb = pca.fit_transform(emb.cpu().numpy()) #numpy runs on cou only
     
     # print(pca_emb.shape)
     # print(pca_emb.max())
     
     pca_emb = pca_emb.reshape(x,y,3)
     # pca_emb = (pca_emb - pca_emb.min()) / (pca_emb.max() - pca_emb.min())
+   
     #Normalization
     pca_emb[:,0] = (pca_emb[:,0] - pca_emb[:,0].min()) / (pca_emb[:,0].max() - pca_emb[:,0].min())
     pca_emb[:,1] = (pca_emb[:,1] - pca_emb[:,1].min()) / (pca_emb[:,1].max() - pca_emb[:,1].min())
