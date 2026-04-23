@@ -1,15 +1,22 @@
 import sys
 from collections import OrderedDict
 
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 import rasterio
+from rasterio.mask import mask
 
 from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
 
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+
+
+import geopandas as gpd
 
 class ResidualBlock(nn.Module): # using nn.Module is Pytorch standard
     """
@@ -106,6 +113,23 @@ def get_tensor_from_pixel_coord(hsi_path, coords, bands):
     
     return ds
     
+def get_tensor (ds):
+    """_summary_
+
+    Args:
+        ds (int16): hsi_path opened with rasterio
+
+    Returns:
+        torch.float32: Tensor
+    """
+    ds = torch.Tensor(ds)
+    ds = ds/10_000
+    ds = ds.transpose(0,2)
+    ds = ds.transpose(0,1)
+    ds = ds.flatten(0,1)
+    ds = ds.unsqueeze (1)
+    return ds
+    
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #use a gpu if available
     print(f"Using {device} device")
@@ -113,11 +137,36 @@ if __name__ == "__main__":
     PATH = 'modelTrained_3_Nepoch_15.pth' # Colin's model
     # HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hdr'
     HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hyspex'
+    HSI_PATH_LIANA ="./hsi_roi/NOU_FL12_20160921_182748_PS01_IMG008_atm_slice_002_x2.hyspex" 
+    SHP_PATH = "liana_shapefile/LianaOrNotLiana.shp"
+    
+    gdf = gpd.read_file(SHP_PATH)
+    
+    
+    with rasterio.open(HSI_PATH_LIANA) as src: #src for source
+        # ds = src.read() #ds for dataset
+        gdf = gdf.to_crs(src.crs)
+        out, _ = mask(src, gdf.geometry, invert=False, crop=True)
+        out = out[:343,:,:]
+        print(out.dtype)
+        
+    
+    out = torch.Tensor(out)
+    out = out /10_000
+    out = out.transpose(0,2)
+    out = out.transpose(0,1)
+    # print(ds.shape)
+    out = out.flatten(0,1)
+    out = out.unsqueeze(1) 
+    # out = get_tensor(out)
+    
+    
     with rasterio.open(HSI_PATH) as src: #src for source
         ds = src.read() #ds for dataset
     
     ds = torch.Tensor(ds)
-    print(ds.shape)
+    ds = ds/10_000
+    # print(ds.shape)
     
     rgb_bands = [5,79,139]
     
@@ -141,7 +190,7 @@ if __name__ == "__main__":
     rgb[:,:,0] = (rgb[:,:,0] - rgb[:,:,0].min()) / (rgb[:,:,0].max() - rgb[:,:,0].min())
     rgb[:,:,1] = (rgb[:,:,1] - rgb[:,:,1].min()) / (rgb[:,:,1].max() - rgb[:,:,1].min())
     rgb[:,:,2] = (rgb[:,:,2] - rgb[:,:,2].min()) / (rgb[:,:,2].max() - rgb[:,:,2].min())
-    print(rgb.min(), rgb.max()) 
+    # print(rgb.min(), rgb.max()) 
     ds = ds[:343,x_start:x_stop,y_start:y_stop]
 
     chans, x, y = ds.shape
@@ -152,9 +201,9 @@ if __name__ == "__main__":
     # print(ds.shape)
     ds = ds.flatten(0,1)
     ds = ds.unsqueeze(1) #add an empty dimension
-    # print(ds.shape)
+    print(ds.shape)
+    # ds= get_tensor(ds)
 
-    
     model = CNN_1D(view_size=343) #view_size = number of HSI bands
     
     chkpt = torch.load(PATH, map_location=torch.device('cpu')) #weights are loaded
@@ -179,34 +228,45 @@ if __name__ == "__main__":
     with torch.no_grad():
         #emb = model(ds)
         emb = model(ds.to(device)) #ds is the tensor
-    print(emb.shape)
+        template_emb = model(out.to(device))
+    
+    # emb = (emb - emb.mean(dim=0)) / emb.std(dim=0)
+    emb = (emb - emb.mean()) / emb.std()
     
     
-    # Applying PCA
-    pca = PCA(n_components=3) # 3 for RGB
-    #pca_emb = pca.fit_transform(emb.numpy())
-    pca_emb = pca.fit_transform(emb.cpu().numpy()) #numpy runs on cou only
+    template = template_emb.mean(dim=0)
+    
+    
+
+    # # Applying PCA
+    # pca = PCA(n_components=3) # 3 for RGB
+    # #pca_emb = pca.fit_transform(emb.numpy())
+    # pca_emb = pca.fit_transform(emb.cpu().numpy()) #numpy runs on cou only
     
     # print(pca_emb.shape)
     # print(pca_emb.max())
     
-    pca_emb = pca_emb.reshape(x,y,3)
+    # pca_emb = pca_emb.reshape(x,y,3)
     # pca_emb = (pca_emb - pca_emb.min()) / (pca_emb.max() - pca_emb.min())
-   
+    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+    sim = cos(template, emb)
+    sim = sim.reshape(x,y)
+    # sim = torch.where(sim > 0.5, sim, sim.mean())
+    sim = torch.where(sim > 0, sim, sim.mean())
+    
     #Normalization
-    pca_emb[:,0] = (pca_emb[:,0] - pca_emb[:,0].min()) / (pca_emb[:,0].max() - pca_emb[:,0].min())
-    pca_emb[:,1] = (pca_emb[:,1] - pca_emb[:,1].min()) / (pca_emb[:,1].max() - pca_emb[:,1].min())
-    pca_emb[:,2] = (pca_emb[:,2] - pca_emb[:,2].min()) / (pca_emb[:,2].max() - pca_emb[:,2].min())
+    # pca_emb[:,0] = (pca_emb[:,0] - pca_emb[:,0].min()) / (pca_emb[:,0].max() - pca_emb[:,0].min())
+    # pca_emb[:,1] = (pca_emb[:,1] - pca_emb[:,1].min()) / (pca_emb[:,1].max() - pca_emb[:,1].min())
+    # pca_emb[:,2] = (pca_emb[:,2] - pca_emb[:,2].min()) / (pca_emb[:,2].max() - pca_emb[:,2].min())
     
     fig, ax = plt.subplots(1,2, figsize=(5,10))
-    ax[0].imshow(pca_emb)
+    # ax[0].imshow(pca_emb)
+    ax[0].imshow(sim ** 10)
+    # ax[0].imshow(sim)
     ax[1].imshow(rgb)
 
     plt.tight_layout()
     plt.show()
-
-
-    
     # # x = torch.rand(100,1,343)
     # with torch.no_grad():
     #     print(model(torch.ones(1000,1,343)).mean())
