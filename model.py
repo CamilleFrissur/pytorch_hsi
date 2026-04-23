@@ -15,7 +15,6 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-
 import geopandas as gpd
 
 class ResidualBlock(nn.Module): # using nn.Module is Pytorch standard
@@ -124,53 +123,76 @@ def get_tensor (ds):
     """
     ds = torch.Tensor(ds)
     ds = ds/10_000
+    return ds
+
+def tensor_format (ds):
+    """
+    Modify ds arguments to fit the order batch, dimension, channels
+
+    Args:
+        ds (torch.float3): Tensor
+
+    Returns:
+        torch.float32: Tensor formatted to be used in the model
+    """
     ds = ds.transpose(0,2)
     ds = ds.transpose(0,1)
     ds = ds.flatten(0,1)
-    ds = ds.unsqueeze (1)
+    ds = ds.unsqueeze (1) #add an empty dimension
+    print(ds.dtype)
     return ds
+
+def encoder_only(weights):
+    """
+    Removing everything related to the projector (as the model is not self-supervised) and keeping the encoding
+
+    Args:
+        weights (_type_): Weights of the model
+
+    Returns:
+        dictionnary: _description_
+    """
+    layers_to_keep = []
+    for k, v in weights.items():
+        if k.startswith("encoder."):
+            layers_to_keep.append((k[len("encoder."):], v))
+    layers_to_keep = layers_to_keep[:-10]
+    d = OrderedDict(layers_to_keep) #d for dictionnary
+    return d
     
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #use a gpu if available
     print(f"Using {device} device")
     
     PATH = 'modelTrained_3_Nepoch_15.pth' # Colin's model
-    # HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hdr'
-    HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hyspex'
-    HSI_PATH_LIANA ="./hsi_roi/NOU_FL12_20160921_182748_PS01_IMG008_atm_slice_002_x2.hyspex" 
+    HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hyspex' #
+    HSI_PATH_LIANA ="./hsi_roi/NOU_FL12_20160921_182748_PS01_IMG008_atm_slice_002_x2.hyspex" #zone where we know there are liana
     SHP_PATH = "liana_shapefile/LianaOrNotLiana.shp"
     
+    # Opening liana shapefile and creating the mask
     gdf = gpd.read_file(SHP_PATH)
-    
     
     with rasterio.open(HSI_PATH_LIANA) as src: #src for source
         # ds = src.read() #ds for dataset
         gdf = gdf.to_crs(src.crs)
         out, _ = mask(src, gdf.geometry, invert=False, crop=True)
         out = out[:343,:,:]
-        print(out.dtype)
-        
-    
-    out = torch.Tensor(out)
-    out = out /10_000
-    out = out.transpose(0,2)
-    out = out.transpose(0,1)
-    # print(ds.shape)
-    out = out.flatten(0,1)
-    out = out.unsqueeze(1) 
-    # out = get_tensor(out)
     
     
     with rasterio.open(HSI_PATH) as src: #src for source
         ds = src.read() #ds for dataset
+           
+    # Creating the tensors
+    out = get_tensor(out)
+    out = tensor_format(out)
+    #print(out.shape)
     
-    ds = torch.Tensor(ds)
-    ds = ds/10_000
-    # print(ds.shape)
+    ds= get_tensor(ds)
+    print(ds.shape)
     
     rgb_bands = [5,79,139]
     
-    # part of the map to plot
+    # Part of the map to plot
     x_start = int(0.3 * ds.shape[1])
     x_stop = int(0.8 * ds.shape[1])
     y_start = int(0.2 * ds.shape[2])
@@ -183,10 +205,10 @@ if __name__ == "__main__":
     rgb = rgb.swapaxes(0,2)
     rgb = rgb.swapaxes(0,1)
     
-    # normalization of RGB bands
+    # Normalization of RGB bands
     rgb = (rgb - rgb.min()) / (rgb.max() - rgb.min())
     
-    #normalization of RGB bands one by one
+    # Normalization of RGB bands one by one
     rgb[:,:,0] = (rgb[:,:,0] - rgb[:,:,0].min()) / (rgb[:,:,0].max() - rgb[:,:,0].min())
     rgb[:,:,1] = (rgb[:,:,1] - rgb[:,:,1].min()) / (rgb[:,:,1].max() - rgb[:,:,1].min())
     rgb[:,:,2] = (rgb[:,:,2] - rgb[:,:,2].min()) / (rgb[:,:,2].max() - rgb[:,:,2].min())
@@ -195,27 +217,14 @@ if __name__ == "__main__":
 
     chans, x, y = ds.shape
     
-    # switch ds arguments to fit the order batch, dimension, channels
-    ds = ds.transpose(0,2)
-    ds = ds.transpose(0,1)
+    ds = tensor_format(ds)
     # print(ds.shape)
-    ds = ds.flatten(0,1)
-    ds = ds.unsqueeze(1) #add an empty dimension
-    print(ds.shape)
-    # ds= get_tensor(ds)
-
+    
     model = CNN_1D(view_size=343) #view_size = number of HSI bands
     
     chkpt = torch.load(PATH, map_location=torch.device('cpu')) #weights are loaded
 
-
-    # Removing everything related to the projector (as the model is not self-supervised) and keeping the encoding    
-    layers_to_keep = []
-    for k, v in chkpt.items():
-        if k.startswith("encoder."):
-            layers_to_keep.append((k[len("encoder."):], v))
-    layers_to_keep = layers_to_keep[:-10]
-    d = OrderedDict(layers_to_keep) #d for dictionnary
+    d = encoder_only(chkpt) #keeping only weights related to encoding
             
     # model.load_state_dict(d, strict=False)
     model.load_state_dict(d) #model applied for encoding only
@@ -237,7 +246,6 @@ if __name__ == "__main__":
     template = template_emb.mean(dim=0)
     
     
-
     # # Applying PCA
     # pca = PCA(n_components=3) # 3 for RGB
     # #pca_emb = pca.fit_transform(emb.numpy())
@@ -248,6 +256,8 @@ if __name__ == "__main__":
     
     # pca_emb = pca_emb.reshape(x,y,3)
     # pca_emb = (pca_emb - pca_emb.min()) / (pca_emb.max() - pca_emb.min())
+    
+    # Applying cosine similarity
     cos = nn.CosineSimilarity(dim=1, eps=1e-6)
     sim = cos(template, emb)
     sim = sim.reshape(x,y)
