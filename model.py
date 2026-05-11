@@ -211,127 +211,143 @@ if __name__ == "__main__":
     # print (f"ds shape is:{ds.shape}")
     
     ## OPTION 2
-    
-    gdf  = gpd.read_file(SHP_PATH, where="Type = 1")
-    with rasterio.open(HSI_PATH_LIANA) as src: #src for source
-        # ds = src.read() #ds for dataset
-        gdf = gdf.to_crs(src.crs)
-        out, _ = mask(src, gdf.geometry, invert=False, crop=True)
-        out = out[:343,:,:]
-    
-    with rasterio.open(HSI_PATH) as src: #src for source
-        ds = src.read() #ds for dataset
-           
-    # # Creating the tensors
-    out = get_tensor(out)
-    out = tensor_format(out)
-    print(out.shape)
-    
-    ds= get_tensor(ds)
-    print(ds.shape)
-    
-    # Part of the map to plot
-    x_start = int(0.3 * ds.shape[1])
-    x_stop = int(0.8 * ds.shape[1])
-    y_start = int(0.2 * ds.shape[2])
-    y_stop = int(0.8 * ds.shape[2])
-    
-    rgb_bands = [5,79,139]
-    
-    rgb = ds[rgb_bands,:,:]
-    rgb = rgb.swapaxes(0,2)
-    rgb = rgb.swapaxes(0,1)
-    
-    # Normalization of RGB bands
-    rgb = (rgb - rgb.min()) / (rgb.max() - rgb.min())
-    
-    # Normalization of RGB bands one by one
-    rgb[:,:,0] = (rgb[:,:,0] - rgb[:,:,0].min()) / (rgb[:,:,0].max() - rgb[:,:,0].min())
-    rgb[:,:,1] = (rgb[:,:,1] - rgb[:,:,1].min()) / (rgb[:,:,1].max() - rgb[:,:,1].min())
-    rgb[:,:,2] = (rgb[:,:,2] - rgb[:,:,2].min()) / (rgb[:,:,2].max() - rgb[:,:,2].min())
-    # print(rgb.min(), rgb.max()) 
-    ds = ds[:343,x_start:x_stop,y_start:y_stop]
-
-    #y, _, chans, x = ds.shape
-    chans, x, y = ds.shape
-    
-    
-    ds = tensor_format(ds)
-    print(ds.shape)
-    
-    model = CNN_1D(view_size=343) #view_size = number of HSI bands
-    
-    chkpt = torch.load(PATH, map_location=torch.device('cpu')) #weights are loaded
-
-    d = encoder_only(chkpt) #keeping only weights related to encoding
+    sim_i = []
+    for i in range (2):
+        gdf  = gpd.read_file(SHP_PATH, where=f"Type = {i}")
+        with rasterio.open(HSI_PATH_LIANA) as src: #src for source
+            # ds = src.read() #ds for dataset
+            gdf = gdf.to_crs(src.crs)
+            out, _ = mask(src, gdf.geometry, invert=False, crop=True)
+            out = out[:343,:,:]
+        
+        with rasterio.open(HSI_PATH) as src: #src for source
+            ds = src.read() #ds for dataset
             
-    # model.load_state_dict(d, strict=False)
-    model.load_state_dict(d) #model applied for encoding only
-    model = model.to(device) # model on gpu if available
-    model.eval() #deactivate normalization
-    
-    # BoundingBox(left=313322.075, bottom=449405.77, right=313672.075, top=451679.77)
-    # emb = ds
-    # emb = emb.squeeze()
-    
-    with torch.no_grad():
-        #emb = model(ds)
-        emb = model(ds.to(device)) #ds is the tensor
-        template_emb = model(out.to(device))
-    
-    # emb = (emb - emb.mean(dim=0)) / emb.std(dim=0)
-    emb = (emb - emb.mean()) / emb.std()
-    
-    
-    template = template_emb.mean(dim=0)
-    
-    
-    # # Applying PCA
-    # pca = PCA(n_components=3) # 3 for RGB
-    # #pca_emb = pca.fit_transform(emb.numpy())
-    # pca_emb = pca.fit_transform(emb.cpu().numpy()) #numpy runs on cou only
-    
-    # print(pca_emb.shape)
-    # print(pca_emb.max())
-    
-    # pca_emb = pca_emb.reshape(x,y,3)
-    # pca_emb = (pca_emb - pca_emb.min()) / (pca_emb.max() - pca_emb.min())
+        # # Creating the tensors
+        out = get_tensor(out)
+        out = tensor_format(out)
+        print(out.shape)
+        
+        ds= get_tensor(ds)
+        print(ds.shape)
+        
+        # Part of the map to plot
+        x_start = int(0.3 * ds.shape[1])
+        x_stop = int(0.8 * ds.shape[1])
+        y_start = int(0.2 * ds.shape[2])
+        y_stop = int(0.8 * ds.shape[2])
+        
+        rgb_bands = [5,79,139]
+        
+        rgb = ds[rgb_bands,:,:]
+        rgb = rgb.swapaxes(0,2)
+        rgb = rgb.swapaxes(0,1)
+        
+        # Normalization of RGB bands
+        rgb = (rgb - rgb.min()) / (rgb.max() - rgb.min())
+        
+        # Normalization of RGB bands one by one
+        rgb[:,:,0] = (rgb[:,:,0] - rgb[:,:,0].min()) / (rgb[:,:,0].max() - rgb[:,:,0].min())
+        rgb[:,:,1] = (rgb[:,:,1] - rgb[:,:,1].min()) / (rgb[:,:,1].max() - rgb[:,:,1].min())
+        rgb[:,:,2] = (rgb[:,:,2] - rgb[:,:,2].min()) / (rgb[:,:,2].max() - rgb[:,:,2].min())
+        
+        rgb = rgb[x_start:x_stop, y_start:y_stop, :] 
+        
+        # print(rgb.min(), rgb.max()) 
+        ds = ds[:343,x_start:x_stop,y_start:y_stop]
 
-    
-    # Applying cosine similarity
-    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
-    sim = cos(template, emb)
-    sim = sim.reshape(x,y)
-    # sim = torch.where(sim > 0.5, sim, sim.mean())
-    sim = torch.where(sim > 0, sim, sim.mean())
-    
-    # Cosine similarity without model (nm=no model)
-   
-    ds_nm = ds.squeeze(1)   # (nb_pixels, bands)
-    
-    print("out shape:", out.shape)
-    print("out dim:", out.dim())
+        #y, _, chans, x = ds.shape
+        chans, x, y = ds.shape
+        
+        
+        ds = tensor_format(ds)
+        print(ds.shape)
+        
+        model = CNN_1D(view_size=343) #view_size = number of HSI bands
+        
+        chkpt = torch.load(PATH, map_location=torch.device('cpu')) #weights are loaded
 
-    out_sq = out.squeeze(1)                # (nb_pixels, 343)
-    mask = (out_sq != 0).any(dim=1)
-    valid_pixels = out_sq[mask]  #only the pixels from the shapefile polygons are kept
-    template_nm = valid_pixels.mean(dim=0) # mean on pixels
-    print("template_nm shape:", template_nm.shape)
-    template_nm = template_nm.unsqueeze(0).expand(ds_nm.shape[0], -1)  # (59640, 343)
+        d = encoder_only(chkpt) #keeping only weights related to encoding
+                
+        # model.load_state_dict(d, strict=False)
+        model.load_state_dict(d) #model applied for encoding only
+        model = model.to(device) # model on gpu if available
+        model.eval() #deactivate normalization
+        
+        # BoundingBox(left=313322.075, bottom=449405.77, right=313672.075, top=451679.77)
+        # emb = ds
+        # emb = emb.squeeze()
+        
+        with torch.no_grad():
+            #emb = model(ds)
+            emb = model(ds.to(device)) #ds is the tensor
+            template_emb = model(out.to(device))
+        
+        # emb = (emb - emb.mean(dim=0)) / emb.std(dim=0)
+        emb = (emb - emb.mean()) / emb.std()
+        
+        
+        template = template_emb.mean(dim=0)
+        
+        
+        # # Applying PCA
+        # pca = PCA(n_components=3) # 3 for RGB
+        # #pca_emb = pca.fit_transform(emb.numpy())
+        # pca_emb = pca.fit_transform(emb.cpu().numpy()) #numpy runs on cou only
+        
+        # print(pca_emb.shape)
+        # print(pca_emb.max())
+        
+        # pca_emb = pca_emb.reshape(x,y,3)
+        # pca_emb = (pca_emb - pca_emb.min()) / (pca_emb.max() - pca_emb.min())
 
-    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
-    sim = cos(template_nm, ds_nm)
-    sim = sim.reshape(x, y)
+        
+        # Applying cosine similarity
+        # cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+        # sim = cos(template, emb)
+        # sim = sim.reshape(x,y)
+        # # sim = torch.where(sim > 0.5, sim, sim.mean())
+        # sim = torch.where(sim > 0, sim, sim.mean())
+        
+        # Cosine similarity without model (nm=no model)
+        ds_nm = ds.squeeze(1)   # (nb_pixels, bands)
+        
+        print("out shape:", out.shape)
+        print("out dim:", out.dim())
+
+        out_sq = out.squeeze(1)                # (nb_pixels, 343)
+        valid_mask = (out_sq != 0).any(dim=1)
+        valid_pixels = out_sq[valid_mask]  #only the pixels from the shapefile polygons are kept
+        template_nm = valid_pixels.mean(dim=0) # mean on pixels
+        print("template_nm shape:", template_nm.shape)
+        template_nm = template_nm.unsqueeze(0).expand(ds_nm.shape[0], -1)  # (59640, 343)
+
+        cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+        sim = cos(template_nm, ds_nm)
+        sim = sim.reshape(x, y)
+        
+        # Normalization
+        # pca_emb[:,0] = (pca_emb[:,0] - pca_emb[:,0].min()) / (pca_emb[:,0].max() - pca_emb[:,0].min())
+        # pca_emb[:,1] = (pca_emb[:,1] - pca_emb[:,1].min()) / (pca_emb[:,1].max() - pca_emb[:,1].min())
+        # pca_emb[:,2] = (pca_emb[:,2] - pca_emb[:,2].min()) / (pca_emb[:,2].max() - pca_emb[:,2].min())
+        sim_i.append(sim)
     
-    # Normalization
-    # pca_emb[:,0] = (pca_emb[:,0] - pca_emb[:,0].min()) / (pca_emb[:,0].max() - pca_emb[:,0].min())
-    # pca_emb[:,1] = (pca_emb[:,1] - pca_emb[:,1].min()) / (pca_emb[:,1].max() - pca_emb[:,1].min())
-    # pca_emb[:,2] = (pca_emb[:,2] - pca_emb[:,2].min()) / (pca_emb[:,2].max() - pca_emb[:,2].min())
+    sim0, sim1= sim_i[0], sim_i[1]
+    print("Shape de sim0 et et sim1:", sim0.shape, sim1.shape)
+    sim_diff = sim1 - sim0
+    print("Shape de sim_diff:", sim_diff.shape)
+    
+    print("sim0 mean:", sim0.mean().item())
+    print("sim1 mean:", sim1.mean().item())
+    print("sim_diff mean:", sim_diff.mean().item())
+    print("sim_diff min:", sim_diff.min().item())
+    print("sim_diff max:", sim_diff.max().item())
     
     fig, ax = plt.subplots(1,2, figsize=(5,10))
     # ax[0].imshow(pca_emb)
-    ax[0].imshow(sim ** 10)
-    # ax[0].imshow(sim)
+    # ax[0].imshow(sim ** 10) # REMPLACER PAR sim0 ou sim1
+    # ax[0].imshow(sim_diff ** 10)
+    ax[0].imshow(sim_diff)
     ax[1].imshow(rgb)
 
     plt.tight_layout()
