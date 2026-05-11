@@ -15,7 +15,10 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
+import pandas as pd
 import geopandas as gpd
+
+from shapely.geometry import box
 
 class ResidualBlock(nn.Module): # using nn.Module is Pytorch standard
     """
@@ -97,18 +100,28 @@ class CNN_1D(nn.Module):
         return x
     
     
-def get_tensor_from_pixel_coord(hsi_path, coords, bands):
+def get_tensor_from_geodataframe(hsi_path, gdf):
     
     # working with rasterio.open reduce the cost when working with voluminous data
-    with rasterio.open(hsi_path) as src: 
-        iterator = src.sample(coords, bands)
-        ds = []
-        
-        for pixel in iterator:
-            ds.append(pixel)
+   
+    with rasterio.open(hsi_path) as src: #src for source
+        # ds = src.read() #ds for dataset
+        gdf = gdf.to_crs(src.crs)
+        out, _ = mask(src, gdf.geometry, invert=False, crop=True)
+        out = out[:343,:,:] # remove once Colin application of bands have been done
     
-    ds = torch.Tensor(ds).unsqueeze(1) # unsqueeze create an empty dimension to fit the needs
+    ds = torch.Tensor(out).unsqueeze(1) # unsqueeze create an empty dimension to fit the needs
     ds = ds / 10_000 # needed to convert the HSI values to right format 
+    print (f"ds shape is:{ds.shape}")
+    ds = ds.transpose(0,2)
+    print (f"ds shape is:{ds.shape}")
+    ds = ds.transpose(0,1)
+    print (f"ds shape is:{ds.shape}")
+    ds = ds.flatten(0,1)
+    print (f"ds shape is:{ds.shape}")
+    ds = ds.unsqueeze (1) #add an empty dimension
+    print (f"ds shape is:{ds.shape}")
+    print(ds.dtype)
     
     return ds
     
@@ -169,28 +182,53 @@ if __name__ == "__main__":
     HSI_PATH_LIANA ="./hsi_roi/NOU_FL12_20160921_182748_PS01_IMG008_atm_slice_002_x2.hyspex" #zone where we know there are liana
     SHP_PATH = "liana_shapefile/LianaOrNotLiana.shp"
     
-    # Opening liana shapefile and creating the mask
-    gdf = gpd.read_file(SHP_PATH)
+    ## OPTION 1: use path and dataframe to have a general (not working yet)
+    # with rasterio.open(HSI_PATH) as src:
+    #     xmin = src.bounds.left
+    #     xmax = src.bounds.right
+    #     ymin = src.bounds.bottom
+    #     ymax = src.bounds.top
+    #     hyspex_crs = src.crs
+
+    # # Équivalent de vos x_start, x_stop, y_start, y_stop
+    # x_start = xmin + 0.3 * (xmax - xmin)
+    # x_stop  = xmin + 0.8 * (xmax - xmin)
+    # y_start = ymin + 0.2 * (ymax - ymin)
+    # y_stop  = ymin + 0.8 * (ymax - ymin)
     
+    # slice_x = [50:250]
+    # slice_y = [30:100]
+    
+    # #Creating a geodataframe based on this coordinates
+    # gdf_map = gpd.GeoDataFrame(geometry=[box(x_start, y_start, x_stop, y_stop)], crs=hyspex_crs)
+    
+    # # Opening liana shapefile and creating the mask
+    # gdf_liana  = gpd.read_file(SHP_PATH, where="Type = 1") # Type = 1 for polygons of liana, Type= 0 for polygons without liana
+    
+    # out = get_tensor_from_geodataframe(HSI_PATH_LIANA, gdf_liana)
+    # print (f"out shape is:{out.shape}")
+    # ds = get_tensor_from_geodataframe (HSI_PATH, gdf_map)
+    # print (f"ds shape is:{ds.shape}")
+    
+    ## OPTION 2
+    
+    gdf  = gpd.read_file(SHP_PATH, where="Type = 1")
     with rasterio.open(HSI_PATH_LIANA) as src: #src for source
         # ds = src.read() #ds for dataset
         gdf = gdf.to_crs(src.crs)
         out, _ = mask(src, gdf.geometry, invert=False, crop=True)
         out = out[:343,:,:]
     
-    
     with rasterio.open(HSI_PATH) as src: #src for source
         ds = src.read() #ds for dataset
            
-    # Creating the tensors
+    # # Creating the tensors
     out = get_tensor(out)
     out = tensor_format(out)
-    #print(out.shape)
+    print(out.shape)
     
     ds= get_tensor(ds)
     print(ds.shape)
-    
-    rgb_bands = [5,79,139]
     
     # Part of the map to plot
     x_start = int(0.3 * ds.shape[1])
@@ -198,10 +236,9 @@ if __name__ == "__main__":
     y_start = int(0.2 * ds.shape[2])
     y_stop = int(0.8 * ds.shape[2])
     
-    # slice_x = [50:250]
-    # slice_y = [30:100]
+    rgb_bands = [5,79,139]
     
-    rgb = ds[rgb_bands,x_start:x_stop,y_start:y_stop]
+    rgb = ds[rgb_bands,:,:]
     rgb = rgb.swapaxes(0,2)
     rgb = rgb.swapaxes(0,1)
     
@@ -215,10 +252,12 @@ if __name__ == "__main__":
     # print(rgb.min(), rgb.max()) 
     ds = ds[:343,x_start:x_stop,y_start:y_stop]
 
+    #y, _, chans, x = ds.shape
     chans, x, y = ds.shape
     
+    
     ds = tensor_format(ds)
-    # print(ds.shape)
+    print(ds.shape)
     
     model = CNN_1D(view_size=343) #view_size = number of HSI bands
     
@@ -234,6 +273,7 @@ if __name__ == "__main__":
     # BoundingBox(left=313322.075, bottom=449405.77, right=313672.075, top=451679.77)
     # emb = ds
     # emb = emb.squeeze()
+    
     with torch.no_grad():
         #emb = model(ds)
         emb = model(ds.to(device)) #ds is the tensor
@@ -256,6 +296,7 @@ if __name__ == "__main__":
     
     # pca_emb = pca_emb.reshape(x,y,3)
     # pca_emb = (pca_emb - pca_emb.min()) / (pca_emb.max() - pca_emb.min())
+
     
     # Applying cosine similarity
     cos = nn.CosineSimilarity(dim=1, eps=1e-6)
@@ -264,7 +305,25 @@ if __name__ == "__main__":
     # sim = torch.where(sim > 0.5, sim, sim.mean())
     sim = torch.where(sim > 0, sim, sim.mean())
     
-    #Normalization
+    # Cosine similarity without model (nm=no model)
+   
+    ds_nm = ds.squeeze(1)   # (nb_pixels, bands)
+    
+    print("out shape:", out.shape)
+    print("out dim:", out.dim())
+
+    out_sq = out.squeeze(1)                # (nb_pixels, 343)
+    mask = (out_sq != 0).any(dim=1)
+    valid_pixels = out_sq[mask]  #only the pixels from the shapefile polygons are kept
+    template_nm = valid_pixels.mean(dim=0) # mean on pixels
+    print("template_nm shape:", template_nm.shape)
+    template_nm = template_nm.unsqueeze(0).expand(ds_nm.shape[0], -1)  # (59640, 343)
+
+    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+    sim = cos(template_nm, ds_nm)
+    sim = sim.reshape(x, y)
+    
+    # Normalization
     # pca_emb[:,0] = (pca_emb[:,0] - pca_emb[:,0].min()) / (pca_emb[:,0].max() - pca_emb[:,0].min())
     # pca_emb[:,1] = (pca_emb[:,1] - pca_emb[:,1].min()) / (pca_emb[:,1].max() - pca_emb[:,1].min())
     # pca_emb[:,2] = (pca_emb[:,2] - pca_emb[:,2].min()) / (pca_emb[:,2].max() - pca_emb[:,2].min())
@@ -277,6 +336,7 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
+    
     # # x = torch.rand(100,1,343)
     # with torch.no_grad():
     #     print(model(torch.ones(1000,1,343)).mean())
