@@ -178,7 +178,8 @@ if __name__ == "__main__":
     print(f"Using {device} device")
     
     PATH = 'modelTrained_3_Nepoch_15.pth' # Colin's model
-    HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hyspex' #
+    #HSI_PATH = 'hsi_roi/NOU_FL09_20160921_184602_PS01_IMG011_atm_slice_004_x2.hyspex' #
+    HSI_PATH = "./hsi_roi/NOU_FL12_20160921_182748_PS01_IMG008_atm_slice_002_x2.hyspex"
     HSI_PATH_LIANA ="./hsi_roi/NOU_FL12_20160921_182748_PS01_IMG008_atm_slice_002_x2.hyspex" #zone where we know there are liana
     SHP_PATH = "liana_shapefile/LianaOrNotLiana.shp"
     
@@ -285,7 +286,7 @@ if __name__ == "__main__":
         
         # emb = (emb - emb.mean(dim=0)) / emb.std(dim=0)
         emb = (emb - emb.mean()) / emb.std()
-        
+        print ("EMbedding's type:", emb.type)
         
         template = template_emb.mean(dim=0)
         
@@ -309,19 +310,15 @@ if __name__ == "__main__":
         # # sim = torch.where(sim > 0.5, sim, sim.mean())
         # sim = torch.where(sim > 0, sim, sim.mean())
         
+        
         # Cosine similarity without model (nm=no model)
         ds_nm = ds.squeeze(1)   # (nb_pixels, bands)
-        
-        print("out shape:", out.shape)
-        print("out dim:", out.dim())
-
         out_sq = out.squeeze(1)                # (nb_pixels, 343)
         valid_mask = (out_sq != 0).any(dim=1)
         valid_pixels = out_sq[valid_mask]  #only the pixels from the shapefile polygons are kept
         template_nm = valid_pixels.mean(dim=0) # mean on pixels
-        print("template_nm shape:", template_nm.shape)
         template_nm = template_nm.unsqueeze(0).expand(ds_nm.shape[0], -1)  # (59640, 343)
-
+        
         cos = nn.CosineSimilarity(dim=1, eps=1e-6)
         sim = cos(template_nm, ds_nm)
         sim = sim.reshape(x, y)
@@ -336,6 +333,7 @@ if __name__ == "__main__":
     print("Shape de sim0 et et sim1:", sim0.shape, sim1.shape)
     sim_diff = sim1 - sim0
     print("Shape de sim_diff:", sim_diff.shape)
+    print("Type de sim_diff:", sim_diff.type)
     
     print("sim0 mean:", sim0.mean().item())
     print("sim1 mean:", sim1.mean().item())
@@ -343,12 +341,17 @@ if __name__ == "__main__":
     print("sim_diff min:", sim_diff.min().item())
     print("sim_diff max:", sim_diff.max().item())
     
-    fig, ax = plt.subplots(1,2, figsize=(5,10))
+    fig, ax = plt.subplots(1,3, figsize=(5,15))
+    
     # ax[0].imshow(pca_emb)
-    # ax[0].imshow(sim ** 10) # REMPLACER PAR sim0 ou sim1
-    # ax[0].imshow(sim_diff ** 10)
-    ax[0].imshow(sim_diff)
-    ax[1].imshow(rgb)
+    im0 = ax[0].imshow(sim0) 
+    fig.colorbar(im0, ax=ax[0])
+    im1 = ax[1].imshow(sim1)
+    fig.colorbar(im1, ax=ax[1])
+    #ax[0].imshow(sim_diff)
+    # ax[0].imshow(sim_diff)
+    im2 = ax[2].imshow(rgb)
+    fig.colorbar(im2, ax=ax[2])
 
     plt.tight_layout()
     plt.show()
