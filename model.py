@@ -191,7 +191,7 @@ if __name__ == "__main__":
     #     ymax = src.bounds.top
     #     hyspex_crs = src.crs
 
-    # # Équivalent de vos x_start, x_stop, y_start, y_stop
+    # # Équivalent de x_start, x_stop, y_start, y_stop
     # x_start = xmin + 0.3 * (xmax - xmin)
     # x_stop  = xmin + 0.8 * (xmax - xmin)
     # y_start = ymin + 0.2 * (ymax - ymin)
@@ -217,12 +217,17 @@ if __name__ == "__main__":
         gdf  = gpd.read_file(SHP_PATH, where=f"Type = {i}")
         with rasterio.open(HSI_PATH_LIANA) as src: #src for source
             # ds = src.read() #ds for dataset
+            # bb = src.bounds # bb for bounding box
+            # print("bounding box:", bb)
             gdf = gdf.to_crs(src.crs)
             out, _ = mask(src, gdf.geometry, invert=False, crop=True)
             out = out[:343,:,:]
         
         with rasterio.open(HSI_PATH) as src: #src for source
             ds = src.read() #ds for dataset
+            bb = src.bounds
+            print("bounding box:", bb)
+            print(bb[0], bb[1], bb[2])
             
         # # Creating the tensors
         out = get_tensor(out)
@@ -231,12 +236,21 @@ if __name__ == "__main__":
         
         ds= get_tensor(ds)
         print(ds.shape)
+        print ("ds.shape[1], ds.shape[2]", ds.shape[1], ds.shape[2])
         
         # Part of the map to plot
         x_start = int(0.3 * ds.shape[1])
         x_stop = int(0.8 * ds.shape[1])
         y_start = int(0.2 * ds.shape[2])
         y_stop = int(0.8 * ds.shape[2])
+        print("x_start, x_stop, y_start, y_stop :", x_start, x_stop, y_start, y_stop)
+        
+        #map coordinates
+        cx_start = bb[0] + (0.3 * (bb[2] - bb[0]))
+        cx_stop = bb[0] + (0.8 * (bb[2] - bb[0]))
+        cy_start = bb[1]+ (0.2 * (bb[3] - bb[1]))
+        cy_stop = bb[1] +(0.8 * (bb[3] - bb[1]))
+        print("cx_start, cx_stop, cy_start, cy_stop :", cx_start, cx_stop, cy_start, cy_stop)
         
         rgb_bands = [5,79,139]
         
@@ -341,21 +355,44 @@ if __name__ == "__main__":
     print("sim_diff min:", sim_diff.min().item())
     print("sim_diff max:", sim_diff.max().item())
     
-    fig, ax = plt.subplots(1,3, figsize=(5,15))
-    
-    # ax[0].imshow(pca_emb)
-    im0 = ax[0].imshow(sim0) 
-    fig.colorbar(im0, ax=ax[0])
-    im1 = ax[1].imshow(sim1)
-    fig.colorbar(im1, ax=ax[1])
-    #ax[0].imshow(sim_diff)
-    # ax[0].imshow(sim_diff)
-    im2 = ax[2].imshow(rgb)
-    fig.colorbar(im2, ax=ax[2])
+    fig, axes = plt.subplots(1, 3, figsize=(9, 15))
+
+    im0 = axes[0].imshow(sim0)
+    fig.colorbar(im0, ax=axes[0])
+    im1 = axes[1].imshow(sim1)
+    fig.colorbar(im1, ax=axes[1])
+    im2 = axes[2].imshow(rgb)
+    fig.colorbar(im2, ax=axes[2])
+
+    # Adding bounding box coordinates (CRS) on the maps
+
+    def label_edges(ax):
+        edges = [
+            # (x_frac, y_frac, text, ha, va, rotation, color, dx, dy)
+            (0.5, 1, f"y start: {cy_start:.1f}", "center", "top",    0,  "goldenrod", 0, -2),
+            (0.5, 0, f"y stop: {cy_stop:.1f}",   "center", "bottom", 0,  "green",     0,  2),
+            (0, 0.5, f"x start: {cx_start:.1f}", "center", "center", 90, "purple",   10,  0),
+            (1, 0.5, f"x stop: {cx_stop:.1f}",   "center", "center", 90, "teal",    -10,  0),
+        ]
+        for x, y, text, ha, va, rot, color, dx, dy in edges:
+            ax.annotate(
+                text,
+                xy=(x, y), xycoords="axes fraction",
+                xytext=(dx, dy), textcoords="offset points",
+                ha=ha, va=va, rotation=rot,
+                fontsize=6.5, color="white", clip_on=False, annotation_clip=False,
+                bbox=dict(boxstyle="round", facecolor=color, alpha=0.9, edgecolor="none"),
+                zorder=10,
+            )
+
+    for ax in axes:
+        label_edges(ax)
 
     plt.tight_layout()
+    plt.subplots_adjust(top=0.90, bottom=0.08, left=0.08, right=0.95)
     plt.show()
     
+   
     # # x = torch.rand(100,1,343)
     # with torch.no_grad():
     #     print(model(torch.ones(1000,1,343)).mean())
